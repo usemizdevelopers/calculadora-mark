@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+@theme {
+  --color-fundo: #f5f6f8;
+  --color-superficie: #ffffff;
+  --color-grafite: #1f2430;
+  --color-linha: #5b6272;
+  --color-trama: #e2e5ea;
+  --color-indigo: #2e3a8c;
+  --color-indigo-escuro: #232d70;
+  --color-indigo-claro: #eef0f9;
+
+  --color-vermelho: #b42318;
+  --color-vermelho-fundo: #fef3f2;
+  --color-laranja: #b54708;
+  --color-laranja-fundo: #fff6ed;
+  --color-amarelo: #946200;
+  --color-amarelo-fundo: #fef7e0;
+  --color-verde: #067647;
+  --color-verde-fundo: #ecfdf3;
+
+  --font-sans: var(--font-plex), system-ui, sans-serif;
+
+  --altura-nav: 4rem;
+}
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (min-width: 1024px) {
+  html {
+    font-size: 106.25%; /* 17px */
+  }
+}
+
+body {
+  background: var(--color-fundo);
+  color: var(--color-grafite);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+}
+
+.numeros {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-indigo);
+  outline-offset: 2px;
+}
+
+input::placeholder {
+  color: #8a90a0;
+}
+
+/* Diálogos: folha que sobe no celular, janela central no desktop */
+@keyframes folha-entra {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes folha-sai {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+@keyframes janela-entra {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes veu-entra {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.dialogo-veu[data-state="open"] {
+  animation: veu-entra 160ms ease-out;
+}
+
+.dialogo-conteudo[data-state="open"] {
+  animation: folha-entra 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dialogo-conteudo[data-state="closed"] {
+  animation: folha-sai 160ms ease-in;
+}
+
+@media (min-width: 640px) {
+  .dialogo-conteudo[data-state="open"] {
+    animation: janela-entra 180ms ease-out;
+  }
+  .dialogo-conteudo[data-state="closed"] {
+    animation: none;
+  }
+}
+
+.regua-marcador {
+  transition: left 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialogo-veu[data-state="open"],
+  .dialogo-conteudo[data-state="open"],
+  .dialogo-conteudo[data-state="closed"] {
+    animation: none;
+  }
+  .regua-marcador {
+    transition: none;
+  }
+}
