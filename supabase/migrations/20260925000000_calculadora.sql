@@ -81,3 +81,8 @@ create policy "Autenticados alteram precos" on public.calc_precos_aprovados
   for update to authenticated using (true) with check (true);
 create policy "Autenticados excluem precos" on public.calc_precos_aprovados
   for delete to authenticated using (true);
+
+-- Este projeto não expõe tabelas novas automaticamente: libera o acesso
+-- aos usuários logados (as políticas RLS acima continuam valendo).
+grant select, update on public.calc_configuracoes to authenticated;
+grant select, insert, update, delete on public.calc_precos_aprovados to authenticated;

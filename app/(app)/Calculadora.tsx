@@ -18,7 +18,7 @@ import {
   type ResultadoAnalise,
   type ResultadoSimulacao,
 } from "@/lib/calculos";
-import { inserirPrecoAprovado, marcarWhatsAppEnviado, type PrecoAprovado } from "@/lib/dados";
+import { descreverErro, inserirPrecoAprovado, marcarWhatsAppEnviado, type PrecoAprovado } from "@/lib/dados";
 import {
   formatarDataHora,
   formatarMetragem,
@@ -69,6 +69,7 @@ export function Calculadora() {
   const [registro, setRegistro] = useState<PrecoAprovado | null>(null);
   const [dialogoWhatsApp, setDialogoWhatsApp] = useState(false);
   const [erroWhatsApp, setErroWhatsApp] = useState<string | null>(null);
+  const [erroSalvar, setErroSalvar] = useState<string | null>(null);
   const [errosAprovacao, setErrosAprovacao] = useState<{ codigo?: string; estoque?: string }>({});
 
   const refCodigo = useRef<HTMLInputElement>(null);
@@ -177,7 +178,8 @@ export function Calculadora() {
       setEtapa("aprovado");
       setErroWhatsApp(null);
       setDialogoWhatsApp(true);
-    } catch {
+    } catch (e) {
+      setErroSalvar(descreverErro(e, "O preço não foi salvo."));
       setEtapa("erro");
     }
   }
@@ -253,6 +255,7 @@ export function Calculadora() {
             registro={registro}
             nomeWhatsApp={configuracoes.whatsappNome}
             erroWhatsApp={erroWhatsApp}
+            erroSalvar={erroSalvar}
             aoAprovar={pedirAprovacao}
             aoAjustar={ajustar}
             aoTentarDeNovo={() => void aprovar()}
@@ -521,6 +524,7 @@ interface PropsAprovacao {
   registro: PrecoAprovado | null;
   nomeWhatsApp: string;
   erroWhatsApp: string | null;
+  erroSalvar: string | null;
   aoAprovar: () => void;
   aoAjustar: () => void;
   aoTentarDeNovo: () => void;
@@ -581,7 +585,7 @@ function Aprovacao(p: PropsAprovacao) {
       )}
       {p.etapa === "erro" && (
         <div role="alert" className="mt-4 rounded-lg border border-vermelho/30 bg-vermelho-fundo px-4 py-3 text-vermelho">
-          <p>O preço não foi salvo. Verifique a conexão com a internet e tente de novo.</p>
+          <p>{p.erroSalvar}</p>
           <button type="button" onClick={p.aoTentarDeNovo} className={`${botao.texto} text-vermelho`}>
             Tentar de novo
           </button>

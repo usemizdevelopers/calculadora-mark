@@ -196,3 +196,19 @@ export async function listarPrecosAprovados(
     temMais: linhas.length > TAMANHO_PAGINA,
   };
 }
+
+/** Explica em português por que uma operação no banco falhou. */
+export function descreverErro(erro: unknown, acao: string): string {
+  const e = (erro ?? {}) as { message?: string; code?: string };
+  const mensagem = e.message ?? "";
+  if (erro instanceof TypeError || /fetch|network|load failed/i.test(mensagem)) {
+    return `${acao} Sem conexão com o servidor. Verifique a internet e tente de novo.`;
+  }
+  if (e.code === "PGRST301" || e.code === "PGRST303" || /jwt/i.test(mensagem)) {
+    return `${acao} Sua sessão expirou. Saia, entre de novo e repita.`;
+  }
+  if (e.code === "42501") {
+    return `${acao} O banco recusou por falta de permissão. Avise o suporte.`;
+  }
+  return `${acao} O banco recusou a operação${mensagem ? ` (${mensagem})` : ""}. Tente de novo ou avise o suporte.`;
+}

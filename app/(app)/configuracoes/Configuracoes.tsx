@@ -5,7 +5,7 @@ import { CampoNumero, CampoTexto } from "@/components/Campo";
 import { useConfiguracoes } from "@/components/ConfiguracoesContexto";
 import { botao } from "@/components/estilos";
 import { validarParametros, type ErrosParametros } from "@/lib/calculos";
-import { salvarConfiguracoes, type Configuracoes as TipoConfiguracoes } from "@/lib/dados";
+import { descreverErro, salvarConfiguracoes, type Configuracoes as TipoConfiguracoes } from "@/lib/dados";
 import { apenasDigitos, lerNumero, numeroParaCampo } from "@/lib/formatacao";
 import { criarClienteNavegador } from "@/lib/supabase/cliente";
 
@@ -69,8 +69,8 @@ export function Configuracoes() {
       await salvarConfiguracoes(criarClienteNavegador(), nova);
       definirConfiguracoes(nova);
       setAviso("Configurações salvas");
-    } catch {
-      setErroSalvar("As configurações não foram salvas. Verifique a internet e tente de novo.");
+    } catch (e) {
+      setErroSalvar(descreverErro(e, "As configurações não foram salvas."));
     } finally {
       setSalvando(false);
     }

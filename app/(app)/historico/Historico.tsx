@@ -11,6 +11,7 @@ import { SeloFaixa } from "@/components/SeloFaixa";
 import { botao, corFaixa } from "@/components/estilos";
 import {
   excluirPrecoAprovado,
+  descreverErro,
   listarPrecosAprovados,
   marcarWhatsAppEnviado,
   type FiltroHistorico,
@@ -58,9 +59,9 @@ export function Historico() {
       setItens((atual) => (p === 0 ? r.itens : [...atual, ...r.itens]));
       setTemMais(r.temMais);
       setPagina(p);
-    } catch {
+    } catch (e) {
       if (id !== requisicao.current) return;
-      setErro("Não foi possível carregar o histórico. Verifique a internet e tente de novo.");
+      setErro(descreverErro(e, "O histórico não carregou."));
     } finally {
       if (id === requisicao.current) {
         setCarregando(false);
