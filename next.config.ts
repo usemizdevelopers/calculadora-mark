@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Gera .next/standalone para rodar em contêiner (Easypanel, Docker).
+  output: "standalone",
 };
 
 export default nextConfig;

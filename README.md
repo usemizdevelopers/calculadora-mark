@@ -48,6 +48,18 @@ Qualquer usuário autenticado lê e altera tudo (RLS só exige login). O SQL est
 
 Importe o repositório, cadastre as duas variáveis de ambiente acima e publique. Não há outra configuração.
 
+## Deploy no Easypanel
+
+O repositório tem um `Dockerfile` (build standalone do Next.js, porta 3000).
+
+1. Crie um projeto e, dentro dele, um serviço **App**.
+2. Em *Source*, escolha **GitHub**, repositório `usemizdevelopers/calculadora-mark` e o branch desejado.
+3. Em *Build*, escolha **Dockerfile** (caminho `Dockerfile`).
+4. Em *Environment*, cadastre as duas variáveis acima (opcional: o Dockerfile já traz esses valores como padrão).
+5. Em *Domains*, adicione o domínio e aponte para a **porta 3000**. O HTTPS é emitido pelo próprio Easypanel.
+6. Clique em **Deploy**.
+7. No Supabase, adicione `https://SEU-DOMINIO/auth/confirmar` em *Redirect URLs* e use o domínio como *Site URL*.
+
 ## Estrutura
 
 - `lib/calculos.ts`: toda a matemática (módulo puro, sem React ou Supabase), testada em `lib/calculos.test.ts`.
