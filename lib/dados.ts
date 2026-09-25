@@ -1,9 +1,12 @@
 // Acesso às tabelas do Supabase e conversão entre linhas e tipos do app.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Faixa, ParametrosCalculo } from "./calculos";
+import type { StatusSolicitacao } from "./solicitacoes";
 
 export const TABELA_CONFIGURACOES = "calc_configuracoes";
 export const TABELA_PRECOS = "calc_precos_aprovados";
+export const TABELA_PERFIS = "calc_perfis";
+export const TABELA_SOLICITACOES = "calc_solicitacoes";
 
 export interface Configuracoes extends ParametrosCalculo {
   whatsappNome: string;
@@ -96,9 +99,12 @@ export interface PrecoAprovado {
   whatsapp_nome: string;
   whatsapp_numero: string;
   whatsapp_enviado_em: string | null;
+  solicitacao_id: string | null;
 }
 
-export type NovoPrecoAprovado = Omit<PrecoAprovado, "id" | "criado_em" | "whatsapp_enviado_em">;
+export type NovoPrecoAprovado = Omit<PrecoAprovado, "id" | "criado_em" | "whatsapp_enviado_em" | "solicitacao_id"> & {
+  solicitacao_id?: string | null;
+};
 
 const CAMPOS_NUMERICOS = [
   "custo_operacional",
@@ -211,4 +217,166 @@ export function descreverErro(erro: unknown, acao: string): string {
     return `${acao} O banco recusou por falta de permissão. Avise o suporte.`;
   }
   return `${acao} O banco recusou a operação${mensagem ? ` (${mensagem})` : ""}. Tente de novo ou avise o suporte.`;
+}
+
+// Perfis e níveis de acesso
+
+export type Papel = "avaliador" | "solicitador";
+
+export interface Perfil {
+  userId: string;
+  nome: string;
+  papel: Papel;
+  whatsapp: string | null;
+}
+
+export async function carregarPerfil(supabase: SupabaseClient, userId: string): Promise<Perfil | null> {
+  const { data, error } = await supabase
+    .from(TABELA_PERFIS)
+    .select("user_id, nome, papel, whatsapp")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return { userId: data.user_id, nome: data.nome, papel: data.papel, whatsapp: data.whatsapp };
+}
+
+export async function carregarWhatsAppDoPerfil(supabase: SupabaseClient, userId: string): Promise<string | null> {
+  const { data } = await supabase.from(TABELA_PERFIS).select("whatsapp").eq("user_id", userId).maybeSingle();
+  return data?.whatsapp ?? null;
+}
+
+// Solicitações
+
+export interface Solicitacao {
+  id: string;
+  criado_em: string;
+  solicitante_id: string;
+  solicitante_nome: string;
+  codigo_produto: string;
+  estoque: number;
+  quantidade_vendida: number;
+  valor_vendido: number;
+  metragem: number;
+  valor_solicitado: number | null;
+  status: StatusSolicitacao;
+  preco_resposta: number | null;
+  observacao: string | null;
+  respondido_em: string | null;
+  preco_aprovado_id: string | null;
+  whatsapp_enviado_em: string | null;
+  lido_em: string | null;
+}
+
+export type NovaSolicitacao = Pick<
+  Solicitacao,
+  "codigo_produto" | "estoque" | "quantidade_vendida" | "valor_vendido" | "metragem" | "valor_solicitado"
+>;
+
+const CAMPOS_SOLICITACAO =
+  "id, criado_em, solicitante_id, solicitante_nome, codigo_produto, estoque, quantidade_vendida, valor_vendido, metragem, valor_solicitado, status, preco_resposta, observacao, respondido_em, preco_aprovado_id, whatsapp_enviado_em, lido_em";
+
+function normalizarSolicitacao(l: Record<string, unknown>): Solicitacao {
+  const numero = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+  return {
+    ...(l as unknown as Solicitacao),
+    estoque: Number(l.estoque),
+    quantidade_vendida: Number(l.quantidade_vendida),
+    valor_vendido: Number(l.valor_vendido),
+    metragem: Number(l.metragem),
+    valor_solicitado: numero(l.valor_solicitado),
+    preco_resposta: numero(l.preco_resposta),
+  };
+}
+
+export async function criarSolicitacao(supabase: SupabaseClient, nova: NovaSolicitacao): Promise<Solicitacao> {
+  const { data, error } = await supabase.from(TABELA_SOLICITACOES).insert(nova).select(CAMPOS_SOLICITACAO).single();
+  if (error) throw error;
+  return normalizarSolicitacao(data);
+}
+
+export async function obterSolicitacao(supabase: SupabaseClient, id: string): Promise<Solicitacao | null> {
+  const { data, error } = await supabase.from(TABELA_SOLICITACOES).select(CAMPOS_SOLICITACAO).eq("id", id).maybeSingle();
+  if (error || !data) return null;
+  return normalizarSolicitacao(data);
+}
+
+/** Pendentes (mais antigas primeiro) ou respondidas (mais recentes primeiro). */
+export async function listarSolicitacoes(
+  supabase: SupabaseClient,
+  situacao: "pendentes" | "respondidas" | "todas",
+  pagina: number,
+): Promise<{ itens: Solicitacao[]; temMais: boolean }> {
+  const inicio = pagina * TAMANHO_PAGINA;
+  let consulta = supabase.from(TABELA_SOLICITACOES).select(CAMPOS_SOLICITACAO);
+  if (situacao === "pendentes") consulta = consulta.eq("status", "pendente").order("criado_em", { ascending: true });
+  else if (situacao === "respondidas") consulta = consulta.neq("status", "pendente").order("respondido_em", { ascending: false });
+  else consulta = consulta.order("criado_em", { ascending: false });
+  const { data, error } = await consulta.range(inicio, inicio + TAMANHO_PAGINA);
+  if (error) throw error;
+  const linhas = (data ?? []).map(normalizarSolicitacao);
+  return { itens: linhas.slice(0, TAMANHO_PAGINA), temMais: linhas.length > TAMANHO_PAGINA };
+}
+
+export async function contarPendentes(supabase: SupabaseClient): Promise<number> {
+  const { count } = await supabase
+    .from(TABELA_SOLICITACOES)
+    .select("id", { count: "exact", head: true })
+    .eq("status", "pendente");
+  return count ?? 0;
+}
+
+export async function contarRespostasNaoLidas(supabase: SupabaseClient, userId: string): Promise<number> {
+  const { count } = await supabase
+    .from(TABELA_SOLICITACOES)
+    .select("id", { count: "exact", head: true })
+    .eq("solicitante_id", userId)
+    .neq("status", "pendente")
+    .is("lido_em", null);
+  return count ?? 0;
+}
+
+export async function marcarRespostasLidas(supabase: SupabaseClient) {
+  await supabase.rpc("calc_marcar_respostas_lidas");
+}
+
+export async function responderSolicitacao(
+  supabase: SupabaseClient,
+  id: string,
+  resposta: {
+    status: "aprovada" | "contraproposta";
+    precoResposta: number;
+    observacao: string | null;
+    precoAprovadoId: string | null;
+    respondidoPor: string;
+  },
+): Promise<Solicitacao> {
+  const { data, error } = await supabase
+    .from(TABELA_SOLICITACOES)
+    .update({
+      status: resposta.status,
+      preco_resposta: resposta.precoResposta,
+      observacao: resposta.observacao,
+      preco_aprovado_id: resposta.precoAprovadoId,
+      respondido_por: resposta.respondidoPor,
+      respondido_em: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .eq("status", "pendente")
+    .select(CAMPOS_SOLICITACAO)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Esta solicitação já foi respondida.");
+  return normalizarSolicitacao(data);
+}
+
+export async function marcarSolicitacaoWhatsApp(supabase: SupabaseClient, id: string): Promise<string> {
+  const agora = new Date().toISOString();
+  const { error } = await supabase.from(TABELA_SOLICITACOES).update({ whatsapp_enviado_em: agora }).eq("id", id);
+  if (error) throw error;
+  return agora;
+}
+
+export async function excluirSolicitacao(supabase: SupabaseClient, id: string) {
+  const { error } = await supabase.from(TABELA_SOLICITACOES).delete().eq("id", id);
+  if (error) throw error;
 }

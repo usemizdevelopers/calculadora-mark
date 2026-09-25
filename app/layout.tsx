@@ -13,6 +13,7 @@ export const metadata: Metadata = {
   title: "Calculadora de preços",
   description: "Margem, simulação e aprovação de preços especiais.",
   robots: { index: false, follow: false },
+  appleWebApp: { capable: true, title: "Preços MK", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {

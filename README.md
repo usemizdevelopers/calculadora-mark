@@ -25,6 +25,11 @@ npm run dev
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://lwpvtfamqvsyqntbyevf.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | chave publicável do projeto (está em `.env.example`) |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | chave pública das notificações (está em `.env.example`) |
+| `VAPID_PRIVATE_KEY` | chave **secreta** das notificações; só no servidor (Easypanel), nunca no repositório |
+| `VAPID_SUBJECT` | opcional, contato do remetente das notificações (`mailto:suporte@usemiz.com`) |
+
+Sem `VAPID_PRIVATE_KEY` o sistema funciona normalmente, só não envia notificações.
 
 A chave publicável é pública por natureza; a proteção dos dados vem do login e das políticas RLS.
 
@@ -34,8 +39,36 @@ Projeto **grupo-mark**. As tabelas desta calculadora usam o prefixo `calc_` para
 
 - `calc_configuracoes`: uma única linha (id = 1) com custo operacional, limites das faixas e destinatário do WhatsApp.
 - `calc_precos_aprovados`: cada preço aprovado, com todas as entradas, resultados e as configurações usadas na época.
+- `calc_perfis`: nome, nível de acesso e WhatsApp de cada usuário.
+- `calc_solicitacoes`: pedidos de avaliação de preço e as respostas.
+- `calc_push_inscricoes`: aparelhos inscritos para receber notificações.
 
-Qualquer usuário autenticado lê e altera tudo (RLS só exige login). O SQL está em `supabase/migrations/` e já foi aplicado.
+O SQL está em `supabase/migrations/` e já foi aplicado.
+
+### Níveis de acesso
+
+| Nível | O que vê |
+|---|---|
+| `avaliador` | Calculadora, Solicitações, Histórico e Configurações |
+| `solicitador` | Nova solicitação e Minhas solicitações (sem custo nem margem) |
+
+Quem não tem linha em `calc_perfis` não entra. As regras valem no próprio banco (RLS). Para liberar um usuário:
+
+```sql
+insert into public.calc_perfis (user_id, nome, papel, whatsapp)
+values ('<id do usuário em auth.users>', 'Nome', 'solicitador', '5531999999999');
+```
+
+### Solicitações
+
+1. O solicitador envia código, estoque, quantidade vendida, valor vendido, metragem e, se quiser, o valor pedido.
+2. O avaliador recebe a notificação, abre a solicitação na calculadora já preenchida e informa o custo.
+3. Se o valor do metro for igual ao pedido (ou não houver pedido), o botão é **Aprovar preço** e o registro vai para o Histórico. Se for diferente, o botão é **Enviar contraproposta**, que encerra a solicitação.
+4. O solicitador recebe notificação, vê a resposta em Minhas solicitações e pode receber a mensagem por WhatsApp.
+
+### Notificações
+
+Push pelo navegador (PWA). No Android e no computador, basta tocar em **Ativar notificações**. No iPhone (iOS 16.4 ou mais novo), primeiro é preciso abrir o site no Safari, tocar em Compartilhar → **Adicionar à Tela de Início** e ativar as notificações pelo app instalado.
 
 ### Configuração no painel
 
@@ -55,7 +88,7 @@ O repositório tem um `Dockerfile` (build standalone do Next.js, porta 3000).
 1. Crie um projeto e, dentro dele, um serviço **App**.
 2. Em *Source*, escolha **GitHub**, repositório `usemizdevelopers/calculadora-mark` e o branch desejado.
 3. Em *Build*, escolha **Dockerfile** (caminho `Dockerfile`).
-4. Em *Environment*, cadastre as duas variáveis acima (opcional: o Dockerfile já traz esses valores como padrão).
+4. Em *Environment*, cadastre `VAPID_PRIVATE_KEY` (obrigatória para as notificações). As variáveis públicas são opcionais: o Dockerfile já traz esses valores como padrão.
 5. Em *Domains*, adicione o domínio e aponte para a **porta 3000**. O HTTPS é emitido pelo próprio Easypanel.
 6. Clique em **Deploy**.
 7. No Supabase, adicione `https://SEU-DOMINIO/auth/confirmar` em *Redirect URLs* e use o domínio como *Site URL*.
@@ -66,5 +99,8 @@ O repositório tem um `Dockerfile` (build standalone do Next.js, porta 3000).
 - `lib/formatacao.ts`: moeda, percentual, metragem, máscaras de entrada e link do WhatsApp.
 - `lib/dados.ts`: leitura e escrita nas tabelas.
 - `proxy.ts`: protege todas as rotas, exceto login e redefinição de senha (no Next.js 16 o antigo `middleware.ts` passou a se chamar `proxy.ts`).
-- `app/(app)/`: Calculadora, Histórico e Configurações.
+- `app/(app)/(avaliador)/`: Calculadora, Solicitações, Histórico e Configurações.
+- `app/(app)/(solicitador)/`: Nova solicitação e Minhas solicitações.
+- `app/api/notificar/`: envia as notificações push; `public/sw.js` as recebe.
+- `lib/solicitacoes.ts`: regra de aprovação × contraproposta e mensagens, testadas em `lib/solicitacoes.test.ts`.
 - `components/ReguaMargem.tsx`: a régua de margem.

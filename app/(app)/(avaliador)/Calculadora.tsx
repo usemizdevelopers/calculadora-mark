@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useId, useRef, useState, type ReactNode } from "react";
 import { CampoNumero, CampoTexto } from "@/components/Campo";
 import { useConfiguracoes } from "@/components/ConfiguracoesContexto";
@@ -7,6 +8,8 @@ import { Dialogo } from "@/components/Dialogo";
 import { DialogoWhatsApp } from "@/components/DialogoWhatsApp";
 import { IconeWhatsApp } from "@/components/IconeWhatsApp";
 import { LinhaValor } from "@/components/LinhaValor";
+import { avisarContadores } from "@/components/Navegacao";
+import { usePerfil } from "@/components/PerfilContexto";
 import { ReguaMargem } from "@/components/ReguaMargem";
 import { SeloFaixa } from "@/components/SeloFaixa";
 import { botao, corFaixa } from "@/components/estilos";
@@ -18,14 +21,26 @@ import {
   type ResultadoAnalise,
   type ResultadoSimulacao,
 } from "@/lib/calculos";
-import { descreverErro, inserirPrecoAprovado, marcarWhatsAppEnviado, type PrecoAprovado } from "@/lib/dados";
+import {
+  descreverErro,
+  inserirPrecoAprovado,
+  marcarSolicitacaoWhatsApp,
+  marcarWhatsAppEnviado,
+  responderSolicitacao,
+  type PrecoAprovado,
+  type Solicitacao,
+} from "@/lib/dados";
 import {
   formatarDataHora,
   formatarMetragem,
   formatarMoeda,
   formatarPercentual,
+  formatarDuasCasas,
   lerNumero,
+  numeroParaCampo,
 } from "@/lib/formatacao";
+import { notificar } from "@/lib/push";
+import { mensagemResposta, tipoResposta, type TipoResposta } from "@/lib/solicitacoes";
 import { criarClienteNavegador } from "@/lib/supabase/cliente";
 
 type Etapa = "editando" | "salvando" | "erro" | "aprovado";
@@ -46,22 +61,37 @@ function erroNaoNegativo(texto: string, valor: number | null) {
 const classeBotaoFixo =
   "fixed inset-x-5 bottom-[calc(var(--altura-nav)+env(safe-area-inset-bottom)+0.75rem)] z-20 shadow-[0_4px_16px_rgba(46,58,140,0.28)] lg:static lg:inset-auto lg:shadow-none";
 
-export function Calculadora() {
+interface PropsCalculadora {
+  /** Quando presente, a calculadora avalia esta solicitação e responde a quem pediu. */
+  solicitacao?: Solicitacao;
+  /** WhatsApp de quem pediu (só dígitos), para enviar a resposta. */
+  whatsappSolicitante?: string | null;
+}
+
+const moedaParaCampo = (v: number | null | undefined) => (v ? formatarDuasCasas(v) : "");
+
+export function Calculadora({ solicitacao, whatsappSolicitante = null }: PropsCalculadora = {}) {
   const { configuracoes } = useConfiguracoes();
+  const perfil = usePerfil();
   const parametros: ParametrosCalculo = configuracoes;
+  const s0 = solicitacao;
 
   // Análise
-  const [codigo, setCodigo] = useState("");
-  const [estoque, setEstoque] = useState("");
-  const [quantidade, setQuantidade] = useState("");
-  const [valorVendido, setValorVendido] = useState("");
+  const [codigo, setCodigo] = useState(s0?.codigo_produto ?? "");
+  const [estoque, setEstoque] = useState(numeroParaCampo(s0?.estoque));
+  const [quantidade, setQuantidade] = useState(numeroParaCampo(s0?.quantidade_vendida));
+  const [valorVendido, setValorVendido] = useState(moedaParaCampo(s0?.valor_vendido));
   const [custo, setCusto] = useState("");
 
   // Simulação
-  const [simulacaoAberta, setSimulacaoAberta] = useState(false);
-  const [metragem, setMetragem] = useState("");
-  const [valorMetro, setValorMetro] = useState("");
-  const [calculado, setCalculado] = useState(false);
+  const [simulacaoAberta, setSimulacaoAberta] = useState(Boolean(s0));
+  const [metragem, setMetragem] = useState(numeroParaCampo(s0?.metragem));
+  const [valorMetro, setValorMetro] = useState(moedaParaCampo(s0?.valor_solicitado));
+  const [calculado, setCalculado] = useState(Boolean(s0));
+
+  // Resposta à solicitação
+  const [observacao, setObservacao] = useState("");
+  const [respondida, setRespondida] = useState<Solicitacao | null>(null);
 
   // Aprovação
   const [etapa, setEtapa] = useState<Etapa>("editando");
@@ -112,6 +142,8 @@ export function Calculadora() {
   };
 
   const travado = etapa === "salvando" || etapa === "aprovado";
+  const tipo: TipoResposta | null =
+    solicitacao && n.valorMetro !== null && n.valorMetro > 0 ? tipoResposta(solicitacao.valor_solicitado, n.valorMetro) : null;
 
   function abrirSimulacao() {
     setSimulacaoAberta(true);
@@ -146,7 +178,11 @@ export function Calculadora() {
     setConfirmarVermelho(false);
     setEtapa("salvando");
     try {
-      const salvo = await inserirPrecoAprovado(criarClienteNavegador(), {
+      const supabase = criarClienteNavegador();
+      // Contraproposta não entra no histórico de preços aprovados.
+      const precisaRegistro = !solicitacao || tipo === "aprovada";
+      // Numa nova tentativa, reaproveita o registro já salvo.
+      const salvo = !precisaRegistro ? null : registro ?? (await inserirPrecoAprovado(supabase, {
         codigo_produto: codigo.trim(),
         custo_operacional: parametros.custoOperacional,
         faixa_vermelho: parametros.faixaVermelho,
@@ -171,25 +207,46 @@ export function Calculadora() {
         nova_margem_media: simulacao.novaMargemMedia,
         saldo_estoque: simulacao.saldoEstoque ?? n.estoque - n.metragem!,
         faixa: simulacao.faixa,
-        whatsapp_nome: configuracoes.whatsappNome,
-        whatsapp_numero: configuracoes.whatsappNumero,
-      });
+        whatsapp_nome: solicitacao ? solicitacao.solicitante_nome : configuracoes.whatsappNome,
+        whatsapp_numero: solicitacao ? (whatsappSolicitante ?? "") : configuracoes.whatsappNumero,
+        solicitacao_id: solicitacao?.id ?? null,
+      }));
       setRegistro(salvo);
+      if (solicitacao && tipo) {
+        const resposta = await responderSolicitacao(supabase, solicitacao.id, {
+          status: tipo,
+          precoResposta: n.valorMetro!,
+          observacao: observacao.trim() || null,
+          precoAprovadoId: salvo?.id ?? null,
+          respondidoPor: perfil.userId,
+        });
+        setRespondida(resposta);
+        notificar(resposta.id, "resposta");
+        avisarContadores();
+      }
       setEtapa("aprovado");
       setErroWhatsApp(null);
-      setDialogoWhatsApp(true);
+      if (!solicitacao || whatsappSolicitante) setDialogoWhatsApp(true);
     } catch (e) {
-      setErroSalvar(descreverErro(e, "O preço não foi salvo."));
+      setErroSalvar(descreverErro(e, solicitacao ? "A resposta não foi salva." : "O preço não foi salvo."));
       setEtapa("erro");
     }
   }
 
   async function registrarEnvio() {
-    if (!registro) return;
     try {
-      const destinatario = { nome: configuracoes.whatsappNome, numero: configuracoes.whatsappNumero };
-      const quando = await marcarWhatsAppEnviado(criarClienteNavegador(), registro.id, destinatario);
-      setRegistro({ ...registro, whatsapp_enviado_em: quando });
+      const supabase = criarClienteNavegador();
+      if (respondida) {
+        const quando = await marcarSolicitacaoWhatsApp(supabase, respondida.id);
+        setRespondida({ ...respondida, whatsapp_enviado_em: quando });
+      }
+      if (registro) {
+        const destinatario = respondida
+          ? { nome: respondida.solicitante_nome, numero: whatsappSolicitante ?? "" }
+          : { nome: configuracoes.whatsappNome, numero: configuracoes.whatsappNumero };
+        const quando = await marcarWhatsAppEnviado(supabase, registro.id, destinatario);
+        setRegistro({ ...registro, whatsapp_enviado_em: quando });
+      }
       setErroWhatsApp(null);
     } catch {
       setErroWhatsApp("O WhatsApp foi aberto, mas a data de envio não foi registrada. Envie de novo pelo Histórico para registrar.");
@@ -247,13 +304,19 @@ export function Calculadora() {
         <ResultadoDaNegociacao simulacao={simulacao} metragem={n.metragem} estoque={n.estoque} />
         {simulacao && (
           <Aprovacao
+            solicitacao={solicitacao ?? null}
+            tipo={tipo}
+            respondida={respondida}
+            podeEnviarWhatsApp={!solicitacao || Boolean(whatsappSolicitante)}
+            observacao={observacao}
+            aoMudarObservacao={setObservacao}
             etapa={etapa}
             codigo={codigo.trim()}
             metragem={n.metragem!}
             valorMetro={n.valorMetro!}
             erroCodigo={errosAprovacao.codigo ?? errosAprovacao.estoque ?? null}
             registro={registro}
-            nomeWhatsApp={configuracoes.whatsappNome}
+            nomeWhatsApp={solicitacao ? solicitacao.solicitante_nome : configuracoes.whatsappNome}
             erroWhatsApp={erroWhatsApp}
             erroSalvar={erroSalvar}
             aoAprovar={pedirAprovacao}
@@ -330,7 +393,7 @@ export function Calculadora() {
                 valor={custo}
                 aoMudar={setCusto}
                 erro={erros.custo}
-                ajuda="Por metro."
+                ajuda={solicitacao && !custo ? "Por metro. Preencha para avaliar a solicitação." : "Por metro."}
                 readOnly={travado}
                 className="col-span-2 sm:col-span-1 lg:col-span-2 xl:col-span-1"
               />
@@ -403,28 +466,49 @@ export function Calculadora() {
         aberto={confirmarVermelho}
         aoMudarAberto={setConfirmarVermelho}
         titulo="Margem abaixo do mínimo"
-        descricao={`Esta margem está abaixo do mínimo de ${formatarPercentual(parametros.faixaVermelho / 100).replace(",0", "")}. Aprovar mesmo assim?`}
+        descricao={`Esta margem está abaixo do mínimo de ${formatarPercentual(parametros.faixaVermelho / 100).replace(",0", "")}. ${
+          tipo === "contraproposta" ? "Enviar a contraproposta mesmo assim?" : "Aprovar mesmo assim?"
+        }`}
       >
         <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <button type="button" className={botao.secundario} onClick={() => setConfirmarVermelho(false)}>
             Voltar
           </button>
           <button type="button" className={botao.perigo} onClick={() => void aprovar()}>
-            Aprovar mesmo assim
+            {tipo === "contraproposta" ? "Enviar mesmo assim" : "Aprovar mesmo assim"}
           </button>
         </div>
       </Dialogo>
 
-      {registro && (
+      {respondida && whatsappSolicitante ? (
         <DialogoWhatsApp
           aberto={dialogoWhatsApp}
           aoMudarAberto={setDialogoWhatsApp}
-          nome={configuracoes.whatsappNome}
-          numero={configuracoes.whatsappNumero}
-          codigoProduto={registro.codigo_produto}
-          precoMetro={registro.preco_negociado_m}
+          nome={respondida.solicitante_nome}
+          numero={whatsappSolicitante}
+          codigoProduto={respondida.codigo_produto}
+          precoMetro={respondida.preco_resposta!}
+          mensagem={mensagemResposta(
+            respondida.status === "aprovada" ? "aprovada" : "contraproposta",
+            respondida.codigo_produto,
+            respondida.preco_resposta!,
+            respondida.observacao,
+          )}
           aoEnviar={() => void registrarEnvio()}
         />
+      ) : (
+        registro &&
+        !solicitacao && (
+          <DialogoWhatsApp
+            aberto={dialogoWhatsApp}
+            aoMudarAberto={setDialogoWhatsApp}
+            nome={configuracoes.whatsappNome}
+            numero={configuracoes.whatsappNumero}
+            codigoProduto={registro.codigo_produto}
+            precoMetro={registro.preco_negociado_m}
+            aoEnviar={() => void registrarEnvio()}
+          />
+        )
       )}
     </>
   );
@@ -516,6 +600,12 @@ function ResultadoDaNegociacao({
 }
 
 interface PropsAprovacao {
+  solicitacao: Solicitacao | null;
+  tipo: TipoResposta | null;
+  respondida: Solicitacao | null;
+  podeEnviarWhatsApp: boolean;
+  observacao: string;
+  aoMudarObservacao: (v: string) => void;
   etapa: Etapa;
   codigo: string;
   metragem: number;
@@ -534,27 +624,37 @@ interface PropsAprovacao {
 }
 
 function Aprovacao(p: PropsAprovacao) {
+  const idObservacao = useId();
   const resumo = `${formatarMetragem(p.metragem)} a ${formatarMoeda(p.valorMetro)}/m${p.codigo ? `, produto ${p.codigo}` : ""}.`;
+  const contraproposta = p.tipo === "contraproposta";
 
-  if (p.etapa === "aprovado" && p.registro) {
+  if (p.etapa === "aprovado" && (p.registro || p.respondida)) {
+    const enviadoEm = p.respondida ? p.respondida.whatsapp_enviado_em : p.registro?.whatsapp_enviado_em;
+    const preco = p.respondida ? p.respondida.preco_resposta! : p.registro!.preco_negociado_m;
+    const metragem = p.respondida ? p.respondida.metragem : p.registro!.metragem_negociada;
+    const codigo = p.respondida ? p.respondida.codigo_produto : p.registro!.codigo_produto;
     return (
       <div className="mt-8 rounded-lg border border-trama bg-fundo p-5">
-        <h3 role="status" className="text-lg font-semibold text-grafite">
-          Preço aprovado
-        </h3>
+        <div role="status">
+          <h3 className="text-lg font-semibold text-grafite">
+            {p.respondida?.status === "contraproposta" ? "Contraproposta enviada" : "Preço aprovado"}
+          </h3>
+        </div>
         <p className="mt-1 text-linha">
-          {formatarMetragem(p.registro.metragem_negociada)} a {formatarMoeda(p.registro.preco_negociado_m)}/m, produto{" "}
-          {p.registro.codigo_produto}.
+          {formatarMetragem(metragem)} a {formatarMoeda(preco)}/m, produto {codigo}.
+          {p.respondida && ` ${p.respondida.solicitante_nome || "Quem pediu"} já pode ver a resposta no sistema.`}
         </p>
-        {p.registro.whatsapp_enviado_em ? (
+        {enviadoEm ? (
           <p className="mt-3 text-grafite">
-            Enviado para {p.nomeWhatsApp} em {formatarDataHora(p.registro.whatsapp_enviado_em)}.
+            Enviado para {p.nomeWhatsApp} em {formatarDataHora(enviadoEm)}.
           </p>
-        ) : (
+        ) : p.podeEnviarWhatsApp ? (
           <button type="button" onClick={p.aoAbrirWhatsApp} className={`${botao.secundario} mt-4 w-full sm:w-auto`}>
             <IconeWhatsApp />
             Enviar no WhatsApp
           </button>
+        ) : (
+          <p className="mt-3 text-sm text-linha">{p.nomeWhatsApp || "Quem pediu"} não tem WhatsApp cadastrado.</p>
         )}
         {p.erroWhatsApp && (
           <p role="alert" className="mt-3 text-vermelho">
@@ -562,22 +662,56 @@ function Aprovacao(p: PropsAprovacao) {
           </p>
         )}
         <div className="mt-5 flex flex-col gap-3 border-t border-trama pt-5 sm:flex-row">
-          <button type="button" onClick={p.aoNovaSimulacao} className={`${botao.principal} sm:flex-1`}>
-            Nova simulação
-          </button>
-          <button type="button" onClick={p.aoNovoProduto} className={`${botao.secundario} sm:flex-1`}>
-            Novo produto
-          </button>
+          {p.solicitacao ? (
+            <Link href="/solicitacoes" className={`${botao.principal} sm:flex-1`}>
+              Voltar para solicitações
+            </Link>
+          ) : (
+            <>
+              <button type="button" onClick={p.aoNovaSimulacao} className={`${botao.principal} sm:flex-1`}>
+                Nova simulação
+              </button>
+              <button type="button" onClick={p.aoNovoProduto} className={`${botao.secundario} sm:flex-1`}>
+                Novo produto
+              </button>
+            </>
+          )}
         </div>
       </div>
     );
   }
 
   const salvando = p.etapa === "salvando";
+  const titulo = contraproposta ? "Enviar contraproposta?" : "Aprovar este preço?";
+  const acao = contraproposta ? "Enviar contraproposta" : "Aprovar preço";
   return (
     <div className="mt-8 rounded-lg border border-indigo/30 bg-indigo-claro p-5">
-      <h3 className="text-lg font-semibold text-grafite">Aprovar este preço?</h3>
+      <h3 className="text-lg font-semibold text-grafite">{titulo}</h3>
       <p className="numeros mt-1 text-linha">{resumo}</p>
+      {p.solicitacao && (
+        <p className="numeros mt-1 text-linha">
+          {p.solicitacao.valor_solicitado === null
+            ? "Sem valor solicitado."
+            : `Valor solicitado: ${formatarMoeda(p.solicitacao.valor_solicitado)}/m.`}
+        </p>
+      )}
+      {p.solicitacao && (
+        <div className="mt-4">
+          <label htmlFor={idObservacao} className="mb-1.5 block text-[0.9375rem] font-medium text-grafite">
+            Observação para {p.solicitacao.solicitante_nome || "quem pediu"}
+          </label>
+          <textarea
+            id={idObservacao}
+            value={p.observacao}
+            onChange={(e) => p.aoMudarObservacao(e.target.value)}
+            readOnly={salvando}
+            rows={2}
+            maxLength={500}
+            placeholder="Opcional"
+            className="block w-full rounded-lg border border-trama bg-superficie px-3.5 py-3 text-grafite outline-none hover:border-linha focus:border-indigo focus:ring-1 focus:ring-indigo"
+          />
+        </div>
+      )}
       {p.erroCodigo && (
         <p role="alert" className="mt-3 text-vermelho">
           {p.erroCodigo}
@@ -593,7 +727,7 @@ function Aprovacao(p: PropsAprovacao) {
       )}
       <div className="mt-5 flex flex-col gap-3 sm:flex-row">
         <button type="button" onClick={p.aoAprovar} disabled={salvando} className={`${botao.principal} sm:flex-1`}>
-          {salvando ? "Salvando…" : "Aprovar preço"}
+          {salvando ? "Salvando…" : acao}
         </button>
         <button type="button" onClick={p.aoAjustar} disabled={salvando} className={`${botao.secundario} sm:flex-1`}>
           Ajustar

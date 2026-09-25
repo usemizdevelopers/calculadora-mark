@@ -3,7 +3,8 @@
 import { Dialogo } from "./Dialogo";
 import { IconeWhatsApp } from "./IconeWhatsApp";
 import { botao } from "./estilos";
-import { formatarTelefone, linkWhatsApp, mensagemWhatsApp } from "@/lib/formatacao";
+import { formatarTelefone, mensagemWhatsApp } from "@/lib/formatacao";
+import { linkWhatsAppTexto } from "@/lib/solicitacoes";
 
 interface Props {
   aberto: boolean;
@@ -12,12 +13,14 @@ interface Props {
   numero: string;
   codigoProduto: string;
   precoMetro: number;
+  /** Texto da mensagem; por padrão, o preço aprovado no formato padrão. */
+  mensagem?: string;
   /** Chamado no clique de Enviar, depois que o link já foi aberto. */
   aoEnviar: () => void;
 }
 
-export function DialogoWhatsApp({ aberto, aoMudarAberto, nome, numero, codigoProduto, precoMetro, aoEnviar }: Props) {
-  const mensagem = mensagemWhatsApp(codigoProduto, precoMetro);
+export function DialogoWhatsApp({ aberto, aoMudarAberto, nome, numero, codigoProduto, precoMetro, mensagem: texto, aoEnviar }: Props) {
+  const mensagem = texto ?? mensagemWhatsApp(codigoProduto, precoMetro);
   return (
     <Dialogo
       aberto={aberto}
@@ -32,7 +35,7 @@ export function DialogoWhatsApp({ aberto, aoMudarAberto, nome, numero, codigoPro
         </button>
         {/* Link direto: abre no próprio clique, sem await, para o Safari não bloquear. */}
         <a
-          href={linkWhatsApp(numero, codigoProduto, precoMetro)}
+          href={linkWhatsAppTexto(numero, mensagem)}
           target="_blank"
           rel="noopener noreferrer"
           className={botao.principal}
